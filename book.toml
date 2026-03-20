@@ -1,0 +1,17 @@
+[book]
+authors = ["Siva Krishna"]
+language = "en"
+src = "src"
+title = "GrindIt: Learn Rust + Leptos by Building a Real Fitness Tracker"
+description = "A hands-on guide to Rust, Leptos, DSA, and System Design — from zero to deployed PWA"
+
+[build]
+build-dir = "book"
+create-missing = true
+
+[output.html]
+default-theme = "coal"
+preferred-dark-theme = "coal"
+git-repository-url = "https://github.com/sivakarasala/gritwit-book"
+edit-url-template = "https://github.com/sivakarasala/gritwit-book/edit/main/src/{path}"
+site-url = "/"

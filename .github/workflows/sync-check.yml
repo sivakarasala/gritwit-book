@@ -1,0 +1,257 @@
+name: Book Sync Check
+
+# Runs weekly and can be triggered by the GrindIt repo via repository_dispatch
+on:
+  schedule:
+    - cron: '0 9 * * 1'  # Every Monday at 9am UTC
+  repository_dispatch:
+    types: [grindit-updated]
+  workflow_dispatch:  # Manual trigger
+
+env:
+  GRINDIT_REPO: sivakarasala/gritwit
+  BOOK_TAG: book-v1
+
+jobs:
+  check-drift:
+    name: Check for GrindIt drift
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout book repo
+        uses: actions/checkout@v4
+
+      - name: Clone GrindIt reference (book-v1 tag)
+        run: |
+          git clone --depth 1 --branch ${{ env.BOOK_TAG }} \
+            https://github.com/${{ env.GRINDIT_REPO }}.git \
+            /tmp/grindit-pinned
+
+      - name: Clone GrindIt latest (main)
+        run: |
+          git clone --depth 1 \
+            https://github.com/${{ env.GRINDIT_REPO }}.git \
+            /tmp/grindit-latest
+
+      - name: Compare key files for drift
+        id: drift
+        run: |
+          DRIFT_FILES=""
+          DRIFT_COUNT=0
+
+          # Key files to track — mapped to chapters
+          declare -A FILE_CHAPTER_MAP
+          FILE_CHAPTER_MAP["src/app.rs"]="Ch 1, 6, 14"
+          FILE_CHAPTER_MAP["src/db.rs"]="Ch 2, 5, 8, 9, 10, 16"
+          FILE_CHAPTER_MAP["src/lib.rs"]="Ch 6"
+          FILE_CHAPTER_MAP["src/main.rs"]="Ch 5, 7, 15, 16"
+          FILE_CHAPTER_MAP["src/configuration.rs"]="Ch 15"
+          FILE_CHAPTER_MAP["src/telemetry.rs"]="Ch 15"
+          FILE_CHAPTER_MAP["src/storage.rs"]="Ch 13"
+          FILE_CHAPTER_MAP["src/pwa.rs"]="Ch 14"
+          FILE_CHAPTER_MAP["src/voice.rs"]="Ch 14"
+          FILE_CHAPTER_MAP["Cargo.toml"]="Ch 1, 5"
+          FILE_CHAPTER_MAP["Dockerfile"]="Ch 17"
+
+          echo "## Drift Report" > /tmp/drift-report.md
+          echo "" >> /tmp/drift-report.md
+          echo "Comparing \`${{ env.BOOK_TAG }}\` (pinned) vs \`main\` (latest)" >> /tmp/drift-report.md
+          echo "" >> /tmp/drift-report.md
+
+          for file in "${!FILE_CHAPTER_MAP[@]}"; do
+            PINNED="/tmp/grindit-pinned/$file"
+            LATEST="/tmp/grindit-latest/$file"
+
+            if [ ! -f "$PINNED" ] && [ ! -f "$LATEST" ]; then
+              continue
+            fi
+
+            if [ ! -f "$PINNED" ] && [ -f "$LATEST" ]; then
+              echo "- **\`$file\`** — NEW file (not in book-v1). Affects: ${FILE_CHAPTER_MAP[$file]}" >> /tmp/drift-report.md
+              DRIFT_COUNT=$((DRIFT_COUNT + 1))
+              DRIFT_FILES="$DRIFT_FILES $file"
+              continue
+            fi
+
+            if [ -f "$PINNED" ] && [ ! -f "$LATEST" ]; then
+              echo "- **\`$file\`** — REMOVED from main. Affects: ${FILE_CHAPTER_MAP[$file]}" >> /tmp/drift-report.md
+              DRIFT_COUNT=$((DRIFT_COUNT + 1))
+              DRIFT_FILES="$DRIFT_FILES $file"
+              continue
+            fi
+
+            if ! diff -q "$PINNED" "$LATEST" > /dev/null 2>&1; then
+              LINES_CHANGED=$(diff "$PINNED" "$LATEST" | grep -c '^[<>]' || true)
+              echo "- **\`$file\`** — ${LINES_CHANGED} lines changed. Affects: ${FILE_CHAPTER_MAP[$file]}" >> /tmp/drift-report.md
+              DRIFT_COUNT=$((DRIFT_COUNT + 1))
+              DRIFT_FILES="$DRIFT_FILES $file"
+            fi
+          done
+
+          # Also check for new migrations
+          PINNED_MIGRATIONS=$(ls /tmp/grindit-pinned/migrations/ 2>/dev/null | wc -l)
+          LATEST_MIGRATIONS=$(ls /tmp/grindit-latest/migrations/ 2>/dev/null | wc -l)
+          if [ "$PINNED_MIGRATIONS" != "$LATEST_MIGRATIONS" ]; then
+            echo "- **\`migrations/\`** — $PINNED_MIGRATIONS → $LATEST_MIGRATIONS migration files. Affects: Ch 5, 8" >> /tmp/drift-report.md
+            DRIFT_COUNT=$((DRIFT_COUNT + 1))
+          fi
+
+          # Also check for new/changed auth files
+          if [ -d "/tmp/grindit-latest/src/auth" ]; then
+            if ! diff -rq /tmp/grindit-pinned/src/auth/ /tmp/grindit-latest/src/auth/ > /dev/null 2>&1; then
+              echo "- **\`src/auth/\`** — auth module changed. Affects: Ch 7, 12" >> /tmp/drift-report.md
+              DRIFT_COUNT=$((DRIFT_COUNT + 1))
+            fi
+          fi
+
+          # Check routes
+          if [ -d "/tmp/grindit-latest/src/routes" ]; then
+            if ! diff -rq /tmp/grindit-pinned/src/routes/ /tmp/grindit-latest/src/routes/ > /dev/null 2>&1; then
+              echo "- **\`src/routes/\`** — routes changed. Affects: Ch 16" >> /tmp/drift-report.md
+              DRIFT_COUNT=$((DRIFT_COUNT + 1))
+            fi
+          fi
+
+          if [ "$DRIFT_COUNT" -eq 0 ]; then
+            echo "" >> /tmp/drift-report.md
+            echo "No drift detected. Book is current with the reference implementation." >> /tmp/drift-report.md
+          else
+            echo "" >> /tmp/drift-report.md
+            echo "**$DRIFT_COUNT file(s) have drifted.** Consider writing evolution log entries." >> /tmp/drift-report.md
+          fi
+
+          echo "drift_count=$DRIFT_COUNT" >> "$GITHUB_OUTPUT"
+          echo "drift_files=$DRIFT_FILES" >> "$GITHUB_OUTPUT"
+          cat /tmp/drift-report.md
+
+      - name: Create GitHub issue if drift detected
+        if: steps.drift.outputs.drift_count != '0'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('/tmp/drift-report.md', 'utf8');
+            const today = new Date().toISOString().slice(0, 10);
+
+            // Check if an open drift issue already exists
+            const existingIssues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'drift',
+            });
+
+            if (existingIssues.data.length > 0) {
+              // Update existing issue
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existingIssues.data[0].number,
+                body: `### Drift check — ${today}\n\n${report}`,
+              });
+              console.log(`Updated existing drift issue #${existingIssues.data[0].number}`);
+            } else {
+              // Create new issue
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `[Drift] GrindIt reference has diverged from book-v1`,
+                body: `### Drift detected — ${today}\n\n${report}\n\n---\n\n### Next steps\n\n1. Review each changed file\n2. Write evolution log entries in \`src/evolution/\`\n3. Update \`src/evolution/README.md\` index\n4. When enough drift accumulates, consider a new book edition\n\nThis issue is auto-generated by the sync-check workflow.`,
+                labels: ['drift', 'automated'],
+              });
+              console.log('Created new drift issue');
+            }
+
+      - name: Scaffold evolution entry
+        if: steps.drift.outputs.drift_count != '0'
+        run: |
+          MONTH=$(date +%Y-%m)
+          ENTRY_FILE="src/evolution/${MONTH}-drift-detected.md"
+
+          if [ ! -f "$ENTRY_FILE" ]; then
+            cat > "$ENTRY_FILE" << 'ENTRY_EOF'
+          # Evolution Entry: YYYY-MM — TODO: Description
+
+          ## What Changed
+
+          <!-- TODO: Describe what changed in the GrindIt reference implementation -->
+
+          ## Why
+
+          <!-- TODO: Explain the motivation for the change -->
+
+          ## Before
+
+          ```rust
+          // TODO: Show the old code
+          ```
+
+          ## After
+
+          ```rust
+          // TODO: Show the new code
+          ```
+
+          ## Try It Yourself
+
+          <!-- TODO: Exercise for the reader to apply this change to their book project -->
+          ENTRY_EOF
+
+            echo "Scaffolded evolution entry: $ENTRY_FILE"
+          else
+            echo "Evolution entry already exists for $MONTH"
+          fi
+
+  check-code-snapshots:
+    name: Verify code snapshots compile
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout book repo
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            code/ch00
+            code/capstone
+
+      - name: Build ch00 (Part 0 exercises)
+        run: |
+          cd code/ch00
+          cargo build 2>&1
+          echo "✅ ch00 compiles"
+
+      - name: Build capstone (DSA exercises)
+        run: |
+          cd code/capstone
+          cargo build 2>&1
+          echo "✅ capstone compiles"
+
+  build-book:
+    name: Build mdBook
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install mdBook
+        run: |
+          mkdir -p $HOME/.local/bin
+          curl -sSL https://github.com/rust-lang/mdBook/releases/latest/download/mdbook-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz -C $HOME/.local/bin
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Build book
+        run: mdbook build
+
+      - name: Check for warnings
+        run: |
+          OUTPUT=$(mdbook build 2>&1)
+          if echo "$OUTPUT" | grep -i "warn\|error"; then
+            echo "❌ Build has warnings or errors"
+            exit 1
+          fi
+          echo "✅ Clean build — no warnings"

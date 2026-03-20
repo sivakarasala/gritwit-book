@@ -1,0 +1,36 @@
+[package]
+name = "grindit-ch00"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "hello"
+path = "src/bin/hello.rs"
+
+[[bin]]
+name = "compiler_error"
+path = "src/bin/compiler_error.rs"
+
+[[bin]]
+name = "sandwich"
+path = "src/bin/sandwich.rs"
+
+[[bin]]
+name = "debug_exercise"
+path = "src/bin/debug_exercise.rs"
+
+[[bin]]
+name = "variables"
+path = "src/bin/variables.rs"
+
+[[bin]]
+name = "functions"
+path = "src/bin/functions.rs"
+
+[[bin]]
+name = "loops"
+path = "src/bin/loops.rs"
+
+[[bin]]
+name = "building_blocks"
+path = "src/bin/building_blocks.rs"

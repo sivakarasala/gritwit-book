@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Chapter 18: Pre-commit hook
+# Install: cp scripts/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+
+set -e
+
+echo "Running pre-commit checks..."
+
+# Format check
+echo "  cargo fmt..."
+cargo fmt --all -- --check
+if [ $? -ne 0 ]; then
+    echo "❌ Formatting issues found. Run 'cargo fmt' to fix."
+    exit 1
+fi
+
+# Lint check
+echo "  cargo clippy..."
+cargo clippy --all-targets -- -D warnings
+if [ $? -ne 0 ]; then
+    echo "❌ Clippy warnings found. Fix them before committing."
+    exit 1
+fi
+
+echo "✅ All pre-commit checks passed!"

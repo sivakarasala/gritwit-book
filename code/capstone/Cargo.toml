@@ -1,0 +1,36 @@
+[package]
+name = "grindit-capstone"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "workout_knapsack"
+path = "src/bin/workout_knapsack.rs"
+
+[[bin]]
+name = "exercise_autocomplete"
+path = "src/bin/exercise_autocomplete.rs"
+
+[[bin]]
+name = "realtime_leaderboard"
+path = "src/bin/realtime_leaderboard.rs"
+
+[[bin]]
+name = "movement_prerequisites"
+path = "src/bin/movement_prerequisites.rs"
+
+[[bin]]
+name = "next_pr_finder"
+path = "src/bin/next_pr_finder.rs"
+
+[[bin]]
+name = "wod_generator"
+path = "src/bin/wod_generator.rs"
+
+[[bin]]
+name = "exercise_cache"
+path = "src/bin/exercise_cache.rs"
+
+[[bin]]
+name = "progression_path"
+path = "src/bin/progression_path.rs"
